@@ -1,0 +1,15 @@
+# Archive téléchargée : seuls les fichiers JSON extraits sont versionnés
+lot1-catalogue/data/raw/pc-part-dataset/json.zip
+
+# Environnement local
+.env
+*.log
+node_modules/
+__pycache__/
+.venv/
+
+# Systèmes / éditeurs
+.DS_Store
+Thumbs.db
+.vscode/
+.idea/

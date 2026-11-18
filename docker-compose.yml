@@ -1,0 +1,236 @@
+# Environnement de développement de la refonte LDLC (persistance polyglotte).
+# Lot 1 (catalogue, MongoDB) : opérationnel.
+# Lot 2 (panier et sessions, Redis) : opérationnel.
+# Lot 3 (logs et analytics, Cassandra) : opérationnel.
+# Lot 4 (recommandations, Neo4j) : opérationnel.
+# Bonus : prototype d'API (FastAPI), http://localhost:8000/docs une fois les quatre lots chargés.
+#
+# Démarrage :            docker compose up -d
+# Un seul lot :          docker compose up -d neo4j-init   (ou mongo-init, redis-init, cassandra-init)
+# Suivre le chargement : docker compose logs -f mongo-init redis-init cassandra-init neo4j-init
+# Repartir de zéro :     docker compose down -v ; docker compose up -d
+
+name: refonte-ldlc
+
+services:
+  mongodb:
+    image: mongo:8
+    container_name: ldlc-mongodb
+    ports:
+      # 27018 côté machine hôte, pour ne pas entrer en conflit avec une instance MongoDB locale.
+      # Connexion Compass : mongodb://localhost:27018
+      - "27018:27017"
+    volumes:
+      - mongo-data:/data/db
+    healthcheck:
+      # Vérification fournie par l'image (mongosh) : la base répond-elle ?
+      test: ["CMD", "mongosh", "--quiet", "--eval", "db.adminCommand('ping').ok"]
+      interval: 10s
+      timeout: 5s
+      retries: 12
+
+  mongo-init:
+    # Conteneur ponctuel (Python + pymongo) : schéma, import, avis, compatibilités, index,
+    # puis il s'arrête. Ne charge que si la base est vide (voir lot1-catalogue/init/charger.py).
+    # Sert aussi à lancer les requêtes types : docker compose run --rm mongo-init python /lot1/queries/...
+    build: ./lot1-catalogue
+    image: refonte-ldlc/lot1-python
+    container_name: ldlc-mongo-init
+    depends_on:
+      mongodb:
+        condition: service_healthy
+    environment:
+      MONGO_URI: mongodb://mongodb:27017
+    volumes:
+      # Données, bibliothèque, scripts et requêtes types du lot 1, en lecture seule
+      - ./lot1-catalogue:/lot1:ro
+      # Fichiers de données des Lots 2, 3 et 4, régénérés par lib/exports.py (seuls dossiers en écriture)
+      - ./lot2-panier-sessions/data:/export/lot2
+      - ./lot3-logs-analytics/data:/export/lot3
+      - ./lot4-recommandations/data:/export/lot4
+    command: ["python", "/lot1/init/charger.py"]
+    restart: "no"
+
+  redis:
+    # Redis 7.2 : dernière version sous licence BSD (base du fork Valkey).
+    # En production : Valkey 8 ou Redis 8, compatibles pour tout ce que ce lot utilise.
+    image: redis:7.2-alpine
+    container_name: ldlc-redis
+    command: ["redis-server", "/usr/local/etc/redis/redis.conf"]
+    ports:
+      # 6380 côté machine hôte, pour ne pas entrer en conflit avec une instance Redis locale
+      - "6380:6379"
+    volumes:
+      - redis-data:/data
+      - ./lot2-panier-sessions/config/redis.conf:/usr/local/etc/redis/redis.conf:ro
+      # Fonctions, données et requêtes types du lot 2, lisibles depuis le conteneur
+      - ./lot2-panier-sessions:/lot2:ro
+    healthcheck:
+      test: ["CMD", "redis-cli", "ping"]
+      interval: 5s
+      timeout: 3s
+      retries: 12
+
+  redis-init:
+    # Conteneur ponctuel : charge les fonctions Lua, la réplique du catalogue et les
+    # données de démonstration, puis s'arrête. Idempotent : relancé à chaque "up".
+    image: redis:7.2-alpine
+    container_name: ldlc-redis-init
+    depends_on:
+      redis:
+        condition: service_healthy
+    environment:
+      REDIS_HOST: redis
+    volumes:
+      - ./lot2-panier-sessions:/lot2:ro
+    entrypoint: ["sh", "/lot2/init/charger.sh"]
+    restart: "no"
+
+  cassandra:
+    # Un seul nœud en développement ; en production, 3 nœuds et un facteur de réplication de 3
+    image: cassandra:5.0
+    container_name: ldlc-cassandra
+    environment:
+      CASSANDRA_CLUSTER_NAME: ldlc-analytics
+      # Snitch de production : le datacenter et le rack sont déclarés, comme sur un vrai cluster
+      CASSANDRA_ENDPOINT_SNITCH: GossipingPropertyFileSnitch
+      CASSANDRA_DC: dc1
+      CASSANDRA_RACK: rack1
+      # Tas Java réduit pour un poste de développement (Cassandra prend 1/4 de la RAM par défaut)
+      MAX_HEAP_SIZE: 768M
+      HEAP_NEWSIZE: 192M
+    ports:
+      # 9043 côté machine hôte, pour ne pas entrer en conflit avec une instance Cassandra locale
+      - "9043:9042"
+    volumes:
+      - cassandra-data:/var/lib/cassandra
+      # Schéma, données, jobs et requêtes types du lot 3, lisibles depuis le conteneur
+      - ./lot3-logs-analytics:/lot3:ro
+    healthcheck:
+      test: ["CMD-SHELL", "cqlsh -e 'SELECT release_version FROM system.local' > /dev/null 2>&1"]
+      interval: 10s
+      timeout: 10s
+      retries: 30
+      start_period: 30s
+
+  cassandra-init:
+    # Conteneur ponctuel : crée le keyspace et les tables, puis charge les données de
+    # démonstration. Idempotent : relancé à chaque "up".
+    # Sert aussi à l'export vers le Lot 4 : docker compose run --rm cassandra-init python3 /lot3/jobs/export_graphe.py
+    image: cassandra:5.0
+    container_name: ldlc-cassandra-init
+    depends_on:
+      cassandra:
+        condition: service_healthy
+    environment:
+      CASSANDRA_HOST: cassandra
+    volumes:
+      - ./lot3-logs-analytics:/lot3:ro
+      # Commandes et vues exportées pour le Lot 4 (seul dossier en écriture)
+      - ./lot4-recommandations/data:/export/lot4
+    command: ["sh", "/lot3/init/charger.sh"]
+    restart: "no"
+
+  neo4j:
+    # Neo4j 5.26 LTS, édition Community (GPLv3). En production : un cluster (Enterprise ou Aura)
+    image: neo4j:5.26-community
+    container_name: ldlc-neo4j
+    environment:
+      # Développement uniquement : sans authentification, comme MongoDB et Redis dans ce dépôt
+      NEO4J_AUTH: none
+      # Mémoire réduite pour un poste de développement : le graphe tient en quelques dizaines de Mo
+      NEO4J_server_memory_heap_initial__size: 384m
+      NEO4J_server_memory_heap_max__size: 384m
+      NEO4J_server_memory_pagecache_size: 128m
+      # LOAD CSV lit les instantanés du dossier data/ du lot
+      NEO4J_server_directories_import: /lot4/data
+      # Neo4j Browser (http://localhost:7475) se connecte au port Bolt publié sur la machine hôte
+      NEO4J_server_bolt_advertised__address: localhost:7688
+    ports:
+      # 7475 et 7688 côté machine hôte, pour ne pas entrer en conflit avec une instance Neo4j locale
+      - "7475:7474"
+      - "7688:7687"
+    volumes:
+      - neo4j-data:/data
+      # Schéma, données, requêtes types du lot 4, lisibles depuis le conteneur
+      - ./lot4-recommandations:/lot4:ro
+    healthcheck:
+      # Une requête Cypher par l'API HTTP, en bash pur (ni curl ni wget dans l'image) : lancer
+      # cypher-shell démarrerait une machine Java à chaque vérification
+      test: ["CMD", "bash", "-c", "exec 3<>/dev/tcp/127.0.0.1/7474 && printf 'POST /db/neo4j/query/v2 HTTP/1.0\\r\\nContent-Type: application/json\\r\\nContent-Length: 24\\r\\n\\r\\n{\"statement\":\"RETURN 1\"}' >&3 && head -1 <&3 | grep -q ' 202 '"]
+      interval: 10s
+      timeout: 5s
+      retries: 30
+      start_period: 20s
+
+  neo4j-init:
+    # Conteneur ponctuel : contraintes, chargement du graphe et arêtes précalculées.
+    # Idempotent (MERGE) : relancé à chaque "up".
+    image: neo4j:5.26-community
+    container_name: ldlc-neo4j-init
+    depends_on:
+      neo4j:
+        condition: service_healthy
+    environment:
+      NEO4J_HOST: neo4j
+    volumes:
+      - ./lot4-recommandations:/lot4:ro
+    entrypoint: ["sh", "/lot4/init/charger.sh"]
+    restart: "no"
+
+  lot4-jobs:
+    # Job du Lot 4 vers le Lot 1 (compatibleProducts), lancé à la demande, jamais par « up » :
+    #   docker compose run --rm lot4-jobs python /lot4/jobs/compatibles_vers_lot1.py
+    # Même image Python que le Lot 1 (pymongo) ; Neo4j est interrogé par son API HTTP.
+    build: ./lot1-catalogue
+    image: refonte-ldlc/lot1-python
+    profiles: ["outils"]
+    depends_on:
+      mongodb:
+        condition: service_healthy
+      neo4j:
+        condition: service_healthy
+    environment:
+      MONGO_URI: mongodb://mongodb:27017
+      NEO4J_URL: http://neo4j:7474
+    volumes:
+      - ./lot1-catalogue:/lot1:ro
+      - ./lot4-recommandations:/lot4:ro
+    restart: "no"
+
+  api:
+    # Bonus : prototype d'API web, sans état, qui sert les quatre bases (voir api/README.md)
+    build: ./api
+    image: refonte-ldlc/api
+    container_name: ldlc-api
+    depends_on:
+      # Démarre une fois les quatre lots chargés
+      mongo-init:
+        condition: service_completed_successfully
+      redis-init:
+        condition: service_completed_successfully
+      cassandra-init:
+        condition: service_completed_successfully
+      neo4j-init:
+        condition: service_completed_successfully
+    environment:
+      MONGO_URI: mongodb://mongodb:27017
+      REDIS_HOST: redis
+      CASSANDRA_HOST: cassandra
+      NEO4J_URL: http://neo4j:7474
+    ports:
+      - "8000:8000"
+    volumes:
+      # Code de l'API et script de démonstration, en lecture seule
+      - ./api:/api:ro
+    healthcheck:
+      test: ["CMD", "python", "-c", "import urllib.request; urllib.request.urlopen('http://localhost:8000/health', timeout=5)"]
+      interval: 10s
+      timeout: 6s
+      retries: 6
+
+volumes:
+  mongo-data:
+  redis-data:
+  cassandra-data:
+  neo4j-data:
