@@ -1,0 +1,58 @@
+# =============================================================================
+# Lot 3 — Profil cassandra-stress : écriture d'événements de navigation
+# Même table que events_by_hour, dans un keyspace séparé (supprimé après la mesure).
+# Utilisé par queries/03-mesures.sh.
+# =============================================================================
+keyspace: ldlc_stress
+keyspace_definition: |
+  CREATE KEYSPACE ldlc_stress WITH replication = {'class': 'NetworkTopologyStrategy', 'dc1': 1};
+
+table: events_by_hour
+table_definition: |
+  CREATE TABLE events_by_hour (
+    day date, hour tinyint, bucket tinyint, ts timestamp, event_id uuid,
+    type text, visit_id uuid, customer_id text, sku text, page text, device text,
+    PRIMARY KEY ((day, hour, bucket), ts, event_id)
+  ) WITH CLUSTERING ORDER BY (ts ASC, event_id ASC)
+    AND default_time_to_live = 7776000
+    AND compaction = {'class': 'TimeWindowCompactionStrategy',
+                      'compaction_window_unit': 'DAYS', 'compaction_window_size': 1}
+
+# Valeurs générées : tailles et cardinalités proches des vrais événements
+columnspec:
+  - name: day
+    population: uniform(1..7)
+  - name: hour
+    population: uniform(0..23)
+  - name: bucket
+    population: uniform(0..15)
+  - name: ts
+    cluster: fixed(200)          # 200 événements par partition
+  - name: event_id
+    cluster: fixed(1)
+  - name: type
+    size: uniform(5..12)
+    population: uniform(1..6)
+  - name: customer_id
+    size: fixed(11)
+    population: uniform(1..25000)
+  - name: sku
+    size: fixed(10)
+    population: gaussian(1..16000)
+  - name: page
+    size: uniform(10..30)
+  - name: device
+    size: uniform(3..7)
+    population: uniform(1..3)
+
+# Une opération = un événement (une ligne), comme un clic reçu par l'ingestion
+insert:
+  partitions: fixed(1)
+  select: fixed(1)/200
+  batchtype: UNLOGGED
+
+queries:
+  # Q6 : une partition (une heure, un bucket), 100 premiers événements
+  heure:
+    cql: SELECT * FROM events_by_hour WHERE day = ? AND hour = ? AND bucket = ? LIMIT 100
+    fields: samerow
