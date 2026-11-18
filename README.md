@@ -18,7 +18,7 @@ LDLC (e-commerce high-tech, plus de 27 000 références, jusqu'à 25 000 colis p
 | 3. Logs et analytics | Millions d'écritures par jour | Colonne | **Cassandra** | Terminé, testé |
 | 4. Recommandations | Parcours de relations | Graphe | **Neo4j** | Terminé, testé |
 
-Les quatre bases partagent un identifiant produit commun, le **SKU** (`CPU-000001`).
+**Nous utilisons le SKU comme identifiant commun aux quatre bases, parce que c’est une référence métier stable, déjà connue de tout le système (stock, commandes, fournisseurs) et lisible : chaque base l’emploie directement comme clé, sans table de correspondance entre des identifiants techniques propres à chacune.**: .
 
 ```mermaid
 flowchart LR
