@@ -26,30 +26,6 @@ Chaque lot est présenté selon la même structure : besoins et **choix technolo
 | 3. Logs et analytics | Écritures massives, séries temporelles, rétention longue | Colonne (wide-column) | Cassandra 5.0 | AP, cohérence réglable |
 | 4. Recommandations | Parcours de relations sur plusieurs niveaux | Graphe | Neo4j 5.26 | CP en cluster |
 
-```mermaid
-flowchart TB
-  CL["Clients : navigateur, application mobile"] --> API["Serveurs web / API sans état, N instances<br/>prototype FastAPI : 23 routes sur les quatre bases"]
-  subgraph BASES["Les quatre bases, une par lot"]
-    direction LR
-    R[("Lot 2 · Redis 7.2<br/>Panier et sessions<br/>primaire + 2 réplicas")]
-    M[("Lot 1 · MongoDB 8<br/>Catalogue produits<br/>replica set de 3 nœuds")]
-    N[("Lot 4 · Neo4j 5.26<br/>Recommandations<br/>cluster de 3 primaires")]
-    C[("Lot 3 · Cassandra 5.0<br/>Logs et analytics<br/>3 nœuds, facteur 3")]
-    M -- "SKU, limites" --> R
-    M -- "produits" --> N
-    N -. "compatibles<br/>(job nocturne)" .-> M
-    C -- "commandes, vues" --> N
-  end
-  API -- "session, panier (Lua) · fiches, listings, avis ·<br/>achetés ensemble, compatibles · vues, tops, commandes, prix" --> BASES
-  R -- "events:cart (outbox)" --> BUS{{"Bus d'événements + ingestion (agrégation par lot)"}}
-  M -- "Change Streams : prix, statuts" --> BUS
-  OMS["Système de commandes (ACID)"] --> BUS
-  BUS -- "clics, compteurs, prix, commandes" --> C
-```
-
-*Figure 1 — Vue d'ensemble : chaque lot a sa base, et les bases échangent par des flux, jamais par des lectures croisées. Trait plein : flux de données ; pointillé : job nocturne.*
-
----
 
 ## 2. Lot 1 — Catalogue produits (MongoDB)
 
@@ -155,7 +131,7 @@ erDiagram
   }
 ```
 
-*Figure 2 — Schéma du Lot 1 : quatre collections et les sous-documents embarqués dans la fiche produit, avec leurs champs et leurs cardinalités. La fiche recopie ce qu'elle affiche et se lit en un seul document ; `reviews` reste la source de vérité des avis.*
+*Figure 1 — Schéma du Lot 1 : quatre collections et les sous-documents embarqués dans la fiche produit, avec leurs champs et leurs cardinalités. La fiche recopie ce qu'elle affiche et se lit en un seul document ; `reviews` reste la source de vérité des avis.*
 
 Extrait d’un document :
 
@@ -263,7 +239,7 @@ flowchart LR
   LUA["<b>7 fonctions Lua (FCALL)</b><br/>cart_add, cart_merge, session_login…"] --> EV
 ```
 
-*Figure 3 — Schéma du Lot 2 : la session pointe vers le panier ; chaque modification du panier publie son événement dans la même opération.*
+*Figure 2 — Schéma du Lot 2 : la session pointe vers le panier ; chaque modification du panier publie son événement dans la même opération.*
 
 | Clé | Structure | Contenu | Durée de vie |
 |----|----|----|----|
@@ -341,7 +317,7 @@ flowchart LR
   O --> T8["<b>price_history_by_product</b><br/>(sku, changed_at DESC) · Q8"]
 ```
 
-*Figure 4 — Schéma du Lot 3 : 8 tables pour 9 requêtes ; chaque requête lit une partition dont la clé est connue d'avance. Chaque clic est écrit 2 fois (journal, parcours) et compté 2 fois (par produit, par jour et shard).*
+*Figure 3 — Schéma du Lot 3 : 8 tables pour 9 requêtes ; chaque requête lit une partition dont la clé est connue d'avance. Chaque clic est écrit 2 fois (journal, parcours) et compté 2 fois (par produit, par jour et shard).*
 
 | Table | Partition | Clustering | Requêtes | Rétention |
 |----|----|----|----|----|
@@ -444,7 +420,7 @@ flowchart LR
   PR -- "USES_CHIP" --> CH["<b>Chipset</b> (241)<br/>puce graphique"]
 ```
 
-*Figure 5 — Schéma du Lot 4 : ce que l'on parcourt devient un nœud ; la compatibilité passe par des nœuds d'interface.*
+*Figure 4 — Schéma du Lot 4 : ce que l'on parcourt devient un nœud ; la compatibilité passe par des nœuds d'interface.*
 
 Le graphe compte 51 871 nœuds et 151 042 arêtes, chargés en 1 min 30 environ à partir des exports des Lots 1 et 3. Neo4j n’a pas de type décimal : les prix y sont en centimes entiers.
 
