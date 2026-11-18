@@ -1,0 +1,33 @@
+id	name	parent
+accessoires-boitier	Accessoires de boîtier	composants
+alimentations	Alimentations	composants
+boitiers	Boîtiers	composants
+cartes-graphiques	Cartes graphiques	composants
+cartes-meres	Cartes mères	composants
+cartes-reseau	Cartes réseau filaires	reseau
+cartes-son	Cartes son	composants
+cartes-wifi	Cartes Wi-Fi	reseau
+casques-audio	Casques audio	peripheriques
+claviers	Claviers	peripheriques
+composants	Composants	
+controleurs-ventilateurs	Contrôleurs de ventilateurs	refroidissement
+disques-externes	Disques externes	stockage
+disques-internes	SSD et disques durs internes	stockage
+ecrans	Écrans	peripheriques
+enceintes	Enceintes	peripheriques
+energie	Énergie	
+lecteurs-optiques	Lecteurs et graveurs	composants
+logiciels	Logiciels	
+memoire-ram	Mémoire RAM	composants
+onduleurs	Onduleurs	energie
+pates-thermiques	Pâtes thermiques	refroidissement
+peripheriques	Périphériques	
+processeurs	Processeurs	composants
+refroidissement	Refroidissement	composants
+reseau	Réseau	
+souris	Souris	peripheriques
+stockage	Stockage	
+systemes-exploitation	Systèmes d'exploitation	logiciels
+ventilateurs-boitier	Ventilateurs de boîtier	refroidissement
+ventirads	Ventirads et watercooling	refroidissement
+webcams	Webcams	peripheriques
